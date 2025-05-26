@@ -1,8 +1,8 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch import optim
 import lightning as L
-from lightning import LightningModule
 import utility as U
 import numpy as np
 
@@ -17,6 +17,15 @@ DEFAULT_MAX_CHANNELS = 256
 
 DEFAULT_AUDIO_DUR = 10 # In seconds
 MAX_SEQ_LEN = 20000
+
+class ELBO_Loss(nn.Module):
+    def __init__(self, KL_weight=1e-3):
+        self.KL = KL_weight
+
+    def forward(self, recon_x: torch.Tensor, x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        MSE = nn.MSELoss(reduction='sum')(recon_x, x)
+        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        return MSE + self.KL * KLD
 
 class SelfAttention(nn.Module):
     def __init__(self,
@@ -247,21 +256,55 @@ class VAE(nn.Module):
         self.latent_dim = self.decoder.latent_channels
         self.latent_sr = self.decoder.latent_sr
 
-    def _sample(self, mu, log_var):
-        std = torch.exp(0.5*log_var)
+    def _sample(self, mu: torch.Tensor, log_var: torch.Tensor):
+        std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
         return eps.mul(std).add_(mu)
 
-    def generate(self, n_samples=1):
+    def generate(self, n_samples: int=1) -> torch.Tensor:
         z = torch.randn([n_samples, self.latent_dim, self.latent_sr])
         audio = self.decoder(z)
         return audio
 
-    def forward(self, input):
+    def forward(self, input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Full VAE encoder + decoder forward pass
+
+        Args:
+            x (torch.Tensor): Batch of waveforms of shape [B, C, T]
+
+        Returns:
+            torch.Tensor: Reconstruction of waveforms in input space of shape [B, C, T]
+            torch.Tensor: Mean of Gaussian distribution over latent space
+            torch.Tensor: Log variance of Gaussian distribution over latent space
+
+        """
         mu, log_var = self.encoder(input)
         sample = self._sample(mu, log_var)
         reconstruction = self.decoder(sample)
         return reconstruction, mu, log_var
+
+class AudioVAE(L.LightningModule):
+    def __init__(self, channels: int, kl_weight: float = 1e-3, lr=1e-4):
+        self.vae = VAE(channels)
+        self.loss = ELBO_Loss(kl_weight)
+        self.lr = lr
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.vae(x)
+
+    def training_step(self, batch, batch_idx=None, dataloader_idx=None) -> torch.Tensor:
+        data, labels = batch
+        reconstruction, mu, log_var = self.vae(batch)
+        loss = self.loss(reconstruction, batch, mu, log_var)
+        self.log('training_elbo_loss', loss, prog_bar=True)
+        return loss
+
+    def generate(self, n_samples: int):
+        return self.vae.generate(n_samples)
+
+    def configure_optimizers(self):
+        return optim.Adam(self.vae.parameters(), self.lr)
 
 
 class Discriminator(nn.Module):
@@ -278,10 +321,12 @@ class GAN(nn.Module):
         pass
 
 if __name__ == '__main__':
-    vae = VAE(1)
-    audio = torch.randn([1, 1, 16000 * 1])
-    recon, mu, log_var = vae(audio)
-    print(recon.size())
-    print(sum(p.numel() for p in vae.parameters()))
-    torch.save(vae.state_dict(), 'tmp.pt')
+    vae = AudioVAE(1)
+    trainer = L.Trainer()
+    trainer.fit(model=vae, train_dataloaders=None)
+    # audio = torch.randn([1, 1, 16000 * 1])
+    # recon, mu, log_var = vae(audio)
+    # print(recon.size())
+    # print(sum(p.numel() for p in vae.parameters()))
+    # torch.save(vae.state_dict(), 'tmp.pt')
 

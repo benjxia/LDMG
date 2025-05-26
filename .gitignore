@@ -3,3 +3,6 @@
 *.pt
 *.pth
 *.ckpt
+**/lightning_logs
+**/data/
+**/Data/
