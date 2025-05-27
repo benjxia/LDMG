@@ -11,7 +11,7 @@ dependencies:
       - torch
       - torchvision
       - torchaudio
-      - torchaudio-augmentatinons
+      - torchaudio-augmentations
       - torchtext
       - lightning
       - numpy
