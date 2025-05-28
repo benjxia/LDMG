@@ -49,7 +49,8 @@ class VAE_Encoder(nn.Module):
                  input_channels: int,
                  latent_channels: int=DEFAULT_LATENT_CHANNELS,
                  input_sr: int=DEFAULT_INPUT_SR,
-                 latent_sr: int=DEFAULT_LATENT_SR):
+                 latent_sr: int=DEFAULT_LATENT_SR,
+                 audio_dur: int=DEFAULT_AUDIO_DUR):
         """
         Conditional Variational Autoencoder Encoder
         Args:
@@ -84,7 +85,7 @@ class VAE_Encoder(nn.Module):
             layers.append(nn.Conv1d(in_ch, in_ch, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING))
             layers.append(nn.GELU())
 
-        layers.append(SelfAttention(in_ch, 4))
+        layers.append(SelfAttention(in_ch, 4, audio_dur))
 
         self.layers = nn.Sequential(*layers)
 
@@ -125,7 +126,8 @@ class VAE_Decoder(nn.Module):
                  input_channels: int,
                  latent_channels: int=DEFAULT_LATENT_CHANNELS,
                  input_sr: int=DEFAULT_INPUT_SR,
-                 latent_sr: int=DEFAULT_LATENT_SR):
+                 latent_sr: int=DEFAULT_LATENT_SR,
+                 audio_dur: int=DEFAULT_AUDIO_DUR):
         """
         Conditional Variational Autoencoder Decoder
         Args:
@@ -151,7 +153,7 @@ class VAE_Decoder(nn.Module):
             nn.GELU(),
         ]
 
-        layers.append(SelfAttention(channels, 4))
+        layers.append(SelfAttention(channels, 4, audio_dur))
 
         for i in range(self.n_upsamples):
             layers.append(UpsampleLayer(channels, channels))
@@ -178,12 +180,12 @@ class VAE_Decoder(nn.Module):
         return self.layers(x)
 
 class VAE(nn.Module):
-    def __init__(self, audio_channels: int, input_sr: int=DEFAULT_INPUT_SR):
+    def __init__(self, audio_channels: int, input_sr: int=DEFAULT_INPUT_SR, audio_dur: int = DEFAULT_AUDIO_DUR):
         super(VAE, self).__init__()
         self.channels = audio_channels
         self.input_sr = input_sr
-        self.encoder = VAE_Encoder(audio_channels, input_sr=DEFAULT_INPUT_SR)
-        self.decoder = VAE_Decoder(audio_channels, input_sr=DEFAULT_INPUT_SR)
+        self.encoder = VAE_Encoder(audio_channels, input_sr=DEFAULT_INPUT_SR, audio_dur=audio_dur)
+        self.decoder = VAE_Decoder(audio_channels, input_sr=DEFAULT_INPUT_SR, audio_dur=audio_dur)
         self.latent_dim = self.decoder.latent_channels
         self.latent_sr = self.decoder.latent_sr
 

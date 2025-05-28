@@ -41,13 +41,13 @@ class AudioVAEGAN(LightningModule):
     """
     Heavily inspired by https://arxiv.org/pdf/2404.10301v2
     """
-    def __init__(self, channels: int, kl_weight: float = 1e-3, adv_weight: float = 1.0, lr: float=1e-4, discriminator_pause: int=0, sample_rate=DEFAULT_INPUT_SR):
+    def __init__(self, channels: int, kl_weight: float = 1e-3, adv_weight: float = 1.0, lr: float=1e-4, discriminator_pause: int=0, sample_rate=DEFAULT_INPUT_SR, audio_dur: int = DEFAULT_AUDIO_DUR):
         super().__init__()
         self.save_hyperparameters()
         self.lr = lr
         self.automatic_optimization = False # We define the optimization routine in training_step() instead of using lightning's automatic one
 
-        self.vae = VAE(channels)
+        self.vae = VAE(channels, audio_dur=audio_dur)
         self.discriminator = PatchDiscriminator(channels)
 
         self.recon_loss = ELBO_Loss(kl_weight, sample_rate)

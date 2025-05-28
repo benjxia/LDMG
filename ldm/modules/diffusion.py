@@ -122,9 +122,9 @@ class DiffusionTransformer(nn.Module):
     def __init__(self,
                  n_layers: int = 4,
                  input_channels: int = DEFAULT_LATENT_CHANNELS, n_attn_heads: int=4,
-                 max_len: int = DEFAULT_AUDIO_DUR * DEFAULT_LATENT_SR):
+                 audio_dur: int = DEFAULT_AUDIO_DUR):
         super(DiffusionTransformer, self).__init__()
-        pe = sinu_posn_embedding(max_len, input_channels)
+        pe = sinu_posn_embedding(audio_dur * DEFAULT_LATENT_SR, input_channels)
         self.register_buffer('pe', pe.unsqueeze(0), persistent=False)
 
         self.timestep_embedding = TimestepEmbedder(input_channels)

@@ -14,7 +14,8 @@ class AudioLDM(LightningModule):
     def __init__(self,
                  n_dit_layers: int=4,
                  audiovae_ckpt_path: str = None,
-                 lr: float = 1e-4
+                 lr: float = 1e-4,
+                 audio_dur:int = DEFAULT_AUDIO_DUR
                  ):
         """
         Properties such as latent space size and shit are determined by loaded vae-gan - and assumed to be the default values
@@ -27,9 +28,9 @@ class AudioLDM(LightningModule):
         """
         super(AudioLDM, self).__init__()
         assert audiovae_ckpt_path is not None
-        self.vae = AudioVAEGAN.load_from_checkpoint(audiovae_ckpt_path)
+        self.vae = AudioVAEGAN.load_from_checkpoint(audiovae_ckpt_path, audio_dur=audio_dur)
 
-        self.dit = DiffusionTransformer(n_dit_layers)
+        self.dit = DiffusionTransformer(n_dit_layers, audio_dur=audio_dur)
         self.diffusion = GaussianDiffusion()
         self.vae.freeze()
         self.lr = lr
