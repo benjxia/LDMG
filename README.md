@@ -24,8 +24,6 @@ conda activate ldmg
 
 ## Dataset Setup for Training
 
-TODO:
-Prerequisites: FFmpeg
 ```
 wget https://os.unil.cloud.switch.ch/fma/fma_medium.zip
 
@@ -34,4 +32,15 @@ unzip fma_medium.zip
 
 ## Running our code
 
-TODO:
+### Training the VAE-GAN
+
+This will also create an additional directory `lightning_logs`
+
+```bash
+python train.py --mode=VAE --checkpoint=<path_to_checkpoint> --data_path=<path_to_data>
+```
+
+### Open Tensorboard dashboard (Only run after the directory has been created)
+```bash
+tensorboard --logdir lightning_logs/
+```

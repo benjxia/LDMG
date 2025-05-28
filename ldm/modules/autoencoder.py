@@ -1,36 +1,16 @@
+from lightning import LightningModule
 import torch
 from torch import nn
-import torch.nn.functional as F
 from torch import optim
-import lightning as L
-import utility as U
 import numpy as np
 
-DEFAULT_INPUT_SR = 16000
-DEFAULT_LATENT_SR = 125 # Chosen because 16000 / 2^7 = 125, and we have an even number of 0.5x downsamples
-DEFAULT_LATENT_CHANNELS = 16 # Seems to be a pretty standard value for this
+import math
 
-DEFAULT_1D_KERNEL_SIZE = 7 # This seems to be standard practice for waveforms
-DEFAULT_1D_PADDING = 3 # Padding necessary for kernel size 7 for exact halving of dimensions
-
-DEFAULT_MAX_CHANNELS = 256
-
-DEFAULT_AUDIO_DUR = 10 # In seconds
-MAX_SEQ_LEN = 20000
-
-class ELBO_Loss(nn.Module):
-    def __init__(self, KL_weight=1e-3):
-        self.KL = KL_weight
-
-    def forward(self, recon_x: torch.Tensor, x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-        MSE = nn.MSELoss(reduction='sum')(recon_x, x)
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        return MSE + self.KL * KLD
+from ldm.modules import DEFAULT_1D_KERNEL_SIZE, DEFAULT_1D_PADDING, DEFAULT_AUDIO_DUR, DEFAULT_INPUT_SR, DEFAULT_LATENT_CHANNELS, DEFAULT_LATENT_SR, DEFAULT_MAX_CHANNELS
+from ldm.modules.loss import ELBO_Loss
 
 class SelfAttention(nn.Module):
-    def __init__(self,
-                 channels: int,
-                 n_heads: int):
+    def __init__(self, channels: int, n_heads: int, max_len: int = DEFAULT_AUDIO_DUR * DEFAULT_LATENT_SR):
         """
         Multiheaded self-attention (with residual connections)
 
@@ -38,27 +18,17 @@ class SelfAttention(nn.Module):
             channels (int): Channels for input sequence
             n_heads (int): Number of attention heads
         """
-        super(SelfAttention, self).__init__()
+        super().__init__()
         self.dim = channels
         self.attn = nn.MultiheadAttention(channels, n_heads, batch_first=True)
 
-
-    def _posn_encoding(self, seq_len: int) -> torch.Tensor:
-        """
-        Positional encoding
-        Args:
-            seq_len (int): Sequence length
-
-        Returns:
-            torch.Tensor: Positional encoding of shape [seq_len, dim]
-        """
-        position = torch.arange(0, seq_len, 1).unsqueeze(0).unsqueeze(-1)
-        denom = torch.pow(10000, -2 * torch.arange(0, self.dim, 1) / self.dim).unsqueeze(0).unsqueeze(0)
-        pe = torch.zeros((1, seq_len, self.dim))
-        pe[:, :, 0::2] = torch.sin(position * denom[:, :, 0::2])
-        pe[:, :, 1::2] = torch.cos(position * denom[:, :, 1::2])
-        self.register_buffer('pe', pe)
-        return pe
+        # Precompute positional encodings
+        position = torch.arange(0, max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, channels, 2) * -(math.log(10000.0) / channels))
+        pe = torch.zeros(max_len, channels)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0), persistent=False)  # shape [1, max_len, channels]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -73,24 +43,39 @@ class SelfAttention(nn.Module):
         Returns:
             torch.Tensor: Tensor of shape [B, C, T]
         """
-        x = x.permute(0, 2, 1)  # [B, T, C]
-        B, T, C = x.shape
-
-        embeddings = self._posn_encoding(T)  # [B, T, C]
-        attn_in = x + embeddings
-
+        B, C, T = x.shape
+        x = x.permute(0, 2, 1)  # Reshape to [B, T, C] (expected shape for attention)
+        pos_emb = self.pe[:, :T, :] # self.register_buffer adds self.pe
+        attn_in = x + pos_emb
         attn_out, _ = self.attn(attn_in, attn_in, attn_in, need_weights=False)
-        out = x + attn_out  # Residual connection
-        return out.permute(0, 2, 1)  # Back to [B, C, T]
+        return (x + attn_out).permute(0, 2, 1)  # Residual connection, Back to [B, C, T]
+
+class UpsampleLayer(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super(UpsampleLayer, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.upsample = nn.ConvTranspose1d(in_channels, out_channels, DEFAULT_1D_KERNEL_SIZE, stride=2, padding=DEFAULT_1D_PADDING, output_padding=1)
+        self.conv = nn.Conv1d(out_channels, out_channels, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING)
+        self.norm = nn.GroupNorm(out_channels // 4, out_channels)
+        self.activation = nn.GELU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.upsample(x)
+        x = self.activation(x)
+        x = self.conv(x) + x
+        x = self.norm(x)
+        x = self.activation(x)
+        return x
 
 class DownsampleLayer(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, activation: str='gelu'):
+    def __init__(self, in_channels: int, out_channels: int):
         super(DownsampleLayer, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.conv = nn.Conv1d(in_channels, out_channels, DEFAULT_1D_KERNEL_SIZE, stride=2, padding=DEFAULT_1D_PADDING)
         self.norm = nn.GroupNorm(out_channels // 4, out_channels)
-        self.activation = U.get_activation(activation)
+        self.activation = nn.GELU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv(x)
@@ -114,11 +99,10 @@ class VAE_Encoder(nn.Module):
         """
         super(VAE_Encoder, self).__init__()
 
-        self.input_channels = input_channels,
+        self.input_channels = input_channels
         self.latent_channels = latent_channels
         self.input_sr = input_sr
         self.latent_sr = latent_sr
-        self.activation = 'gelu'
 
         # Input dimension must be some power of 2 multiple of latent dim
         self.n_downsamples = np.ceil(np.log2(self.input_sr / self.latent_sr)).astype(np.int32)
@@ -127,7 +111,7 @@ class VAE_Encoder(nn.Module):
         starter_channels = 16
         layers = [
             nn.Conv1d(input_channels, starter_channels, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING),
-            U.get_activation_module('gelu'),
+            nn.GELU(),
         ]
 
         # Channels go from 16 -> 32 -> 64 -> DEFAULT_MAX_CHANNELS ... n_downsamples layers
@@ -136,20 +120,22 @@ class VAE_Encoder(nn.Module):
             out_ch = min(in_ch * 2, DEFAULT_MAX_CHANNELS)
             layers.append(DownsampleLayer(in_ch, out_ch))  # Downsample by factor of 2
             in_ch = out_ch
-            if (i + 1) >= 4 and (i + 1) % 2 == 0:
-                layers.append(SelfAttention(in_ch, 4))
+            layers.append(nn.Conv1d(in_ch, in_ch, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING))
+            layers.append(nn.GELU())
+
+        layers.append(SelfAttention(in_ch, 4))
 
         self.layers = nn.Sequential(*layers)
 
         self.mu_proj = nn.Sequential(
             nn.Conv1d(in_ch, in_ch, kernel_size=DEFAULT_1D_KERNEL_SIZE, padding=DEFAULT_1D_PADDING),
-            U.get_activation_module('gelu'),
+            nn.GELU(),
             nn.Conv1d(in_ch, latent_channels, kernel_size=1)
         )
 
         self.logvar_proj = nn.Sequential(
             nn.Conv1d(in_ch, in_ch, kernel_size=DEFAULT_1D_KERNEL_SIZE, padding=DEFAULT_1D_PADDING),
-            U.get_activation_module('gelu'),
+            nn.GELU(),
             nn.Conv1d(in_ch, latent_channels, kernel_size=1)
         )
 
@@ -173,24 +159,6 @@ class VAE_Encoder(nn.Module):
         x = self.layers(x)
         return self.mu_proj(x), self.logvar_proj(x)
 
-class UpsampleLayer(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, activation: str='gelu'):
-        super(UpsampleLayer, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.upsample = nn.ConvTranspose1d(in_channels, out_channels, DEFAULT_1D_KERNEL_SIZE, stride=2, padding=DEFAULT_1D_PADDING, output_padding=1)
-        self.conv = nn.Conv1d(out_channels, out_channels, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING)
-        self.norm = nn.GroupNorm(out_channels // 4, out_channels)
-        self.activation = U.get_activation(activation)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.upsample(x)
-        x = self.activation(x)
-        x = self.conv(x) + x
-        x = self.norm(x)
-        x = self.activation(x)
-        return x
-
 class VAE_Decoder(nn.Module):
     def __init__(self,
                  input_channels: int,
@@ -211,7 +179,6 @@ class VAE_Decoder(nn.Module):
         self.latent_channels = latent_channels
         self.input_sr = input_sr
         self.latent_sr = latent_sr
-        self.activation = 'gelu'
 
         # Input dimensions must be some power of 2 multiple of latent dim
         self.n_upsamples = np.ceil(np.log2(self.input_sr / self.latent_sr)).astype(np.int32)
@@ -220,13 +187,15 @@ class VAE_Decoder(nn.Module):
         channels = DEFAULT_MAX_CHANNELS
         layers = [
             nn.Conv1d(latent_channels, channels, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING),
-            U.get_activation_module('gelu'),
+            nn.GELU(),
         ]
+
+        layers.append(SelfAttention(channels, 4))
 
         for i in range(self.n_upsamples):
             layers.append(UpsampleLayer(channels, channels))
-            if (i + 1) >= 4 and (i + 1) % 2 == 0:
-                layers.append(SelfAttention(channels, 4))
+            layers.append(nn.Conv1d(channels, channels, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING))
+            layers.append(nn.GELU())
 
         layers.append(nn.Conv1d(channels, input_channels, kernel_size=1))
 
@@ -248,11 +217,12 @@ class VAE_Decoder(nn.Module):
         return self.layers(x)
 
 class VAE(nn.Module):
-    def __init__(self, audio_channels: int):
+    def __init__(self, audio_channels: int, input_sr: int=DEFAULT_INPUT_SR):
         super(VAE, self).__init__()
         self.channels = audio_channels
-        self.encoder = VAE_Encoder(audio_channels)
-        self.decoder = VAE_Decoder(audio_channels)
+        self.input_sr = input_sr
+        self.encoder = VAE_Encoder(audio_channels, input_sr=DEFAULT_INPUT_SR)
+        self.decoder = VAE_Decoder(audio_channels, input_sr=DEFAULT_INPUT_SR)
         self.latent_dim = self.decoder.latent_channels
         self.latent_sr = self.decoder.latent_sr
 
@@ -261,8 +231,8 @@ class VAE(nn.Module):
         eps = torch.randn_like(std)
         return eps.mul(std).add_(mu)
 
-    def generate(self, n_samples: int=1) -> torch.Tensor:
-        z = torch.randn([n_samples, self.latent_dim, self.latent_sr])
+    def generate(self, n_samples: int=1, dur: int = DEFAULT_AUDIO_DUR) -> torch.Tensor:
+        z = torch.randn([n_samples, self.latent_dim, self.latent_sr * dur]).to(device='cuda:0')
         audio = self.decoder(z)
         return audio
 
@@ -284,8 +254,10 @@ class VAE(nn.Module):
         reconstruction = self.decoder(sample)
         return reconstruction, mu, log_var
 
-class AudioVAE(L.LightningModule):
+# Unused now
+class AudioVAE(LightningModule):
     def __init__(self, channels: int, kl_weight: float = 1e-3, lr=1e-4):
+        super(AudioVAE, self).__init__()
         self.vae = VAE(channels)
         self.loss = ELBO_Loss(kl_weight)
         self.lr = lr
@@ -294,7 +266,6 @@ class AudioVAE(L.LightningModule):
         return self.vae(x)
 
     def training_step(self, batch, batch_idx=None, dataloader_idx=None) -> torch.Tensor:
-        data, labels = batch
         reconstruction, mu, log_var = self.vae(batch)
         loss = self.loss(reconstruction, batch, mu, log_var)
         self.log('training_elbo_loss', loss, prog_bar=True)
@@ -305,28 +276,3 @@ class AudioVAE(L.LightningModule):
 
     def configure_optimizers(self):
         return optim.Adam(self.vae.parameters(), self.lr)
-
-
-class Discriminator(nn.Module):
-    def __init__(self):
-        pass
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pass
-
-class GAN(nn.Module):
-    def __init__(self):
-        pass
-
-    def forward(self, x):
-        pass
-
-if __name__ == '__main__':
-    vae = AudioVAE(1)
-    trainer = L.Trainer()
-    trainer.fit(model=vae, train_dataloaders=None)
-    # audio = torch.randn([1, 1, 16000 * 1])
-    # recon, mu, log_var = vae(audio)
-    # print(recon.size())
-    # print(sum(p.numel() for p in vae.parameters()))
-    # torch.save(vae.state_dict(), 'tmp.pt')
-

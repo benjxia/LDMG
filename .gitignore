@@ -4,6 +4,7 @@
 *.pth
 *.ckpt
 **/lightning_logs
-**/data/
 **/Data/
-fma_*
+fma_medium
+fma_metadata
+*.zip
