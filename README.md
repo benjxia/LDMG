@@ -25,6 +25,12 @@ conda activate ldmg
 ## Dataset Setup for Training
 
 TODO:
+Prerequisites: FFmpeg
+```
+wget https://os.unil.cloud.switch.ch/fma/fma_medium.zip
+
+unzip fma_medium.zip
+```
 
 ## Running our code
 

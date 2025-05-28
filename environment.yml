@@ -16,3 +16,4 @@ dependencies:
       - lightning
       - numpy
       - pandas
+      - scipy
