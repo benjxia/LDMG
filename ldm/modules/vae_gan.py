@@ -132,7 +132,11 @@ class AudioVAEGAN(LightningModule):
             "disc/loss": d_loss,
         }, prog_bar=True, on_step=True, on_epoch=True)
 
+    @torch.no_grad()
     def generate(self, n_samples: int, dur: int = DEFAULT_AUDIO_DUR):
+        """
+        This is kinda shit - the Gaussian prior on the latent space is a little too weak
+        """
         return self.vae.generate(n_samples, dur)
 
     def configure_optimizers(self):

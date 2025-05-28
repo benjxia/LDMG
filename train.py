@@ -6,6 +6,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 import os
 
 from ldm.data.fma_dataset import MusicDataModule
+from ldm.modules.ldm import AudioLDM
 from ldm.modules.vae_gan import AudioVAEGAN
 
 if __name__ == '__main__':
@@ -14,6 +15,7 @@ if __name__ == '__main__':
                     description='Trains the latent diffusion model',
                     epilog='Good luck running my shit code - ben')
     parser.add_argument('-m', '--mode', help='Whether to train VAE or LDM, takes values VAE or LDM', type=str, required=True) # Whether to train VAE-GAN or LDM <vae>
+    parser.add_argument('-vg', '--vae_checkpoint', default=None, type=str)
     parser.add_argument('-c', '--checkpoint', default=None, type=str) # Path to checkpoint
     parser.add_argument('-d', '--data_path', default=None, type=str, required=True)
     parser.add_argument('-e', '--epochs', default=5, type=int) # Number of epochs to train for
@@ -39,7 +41,22 @@ if __name__ == '__main__':
         data_module.setup()
 
     elif args.mode == 'LDM':
-        raise NotImplementedError
+        if args.vae_checkpoint is None:
+            raise ValueError
+        if args.checkpoint is None:
+            model = AudioLDM(1,
+                             sample_rate=args.sample_rate, audiovae_ckpt_path=args.vae_checkpoint)
+        else:
+            model = AudioLDM.load_from_checkpoint(args.checkpoint)
+
+        # TODO: do something else for conditioned generation
+        data_module = MusicDataModule(
+            data_dir=args.data_path,
+            target_sr=args.sample_rate,
+            clip_duration=args.audio_dur,
+            batch_size=args.batch_size,
+            num_workers=os.cpu_count())
+        data_module.setup()
 
     ckpt_callback = ModelCheckpoint(
         every_n_train_steps=100,
