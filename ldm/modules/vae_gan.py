@@ -5,9 +5,9 @@ import torch.nn.functional as F
 import lightning as L
 from lightning import LightningModule
 
-from ldm.modules import DEFAULT_INPUT_SR
-from ldm.modules.autoencoder import DEFAULT_AUDIO_DUR, VAE
-from ldm.modules.loss import ELBO_Loss, feature_matching_loss
+from . import DEFAULT_INPUT_SR
+from .autoencoder import DEFAULT_AUDIO_DUR, VAE
+from .loss import ELBO_Loss, feature_matching_loss
 
 import numpy as np
 
@@ -38,6 +38,9 @@ class PatchDiscriminator(nn.Module):
         return (x, features) if return_features else x
 
 class AudioVAEGAN(LightningModule):
+    """
+    Heavily inspired by https://arxiv.org/pdf/2404.10301v2
+    """
     def __init__(self, channels: int, kl_weight: float = 1e-3, adv_weight: float = 1.0, lr: float=1e-4, discriminator_pause: int=0, sample_rate=DEFAULT_INPUT_SR):
         super().__init__()
         self.save_hyperparameters()

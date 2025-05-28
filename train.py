@@ -29,6 +29,7 @@ if __name__ == '__main__':
             model = AudioVAEGAN(1, sample_rate=args.sample_rate, discriminator_pause=args.discriminator_pause)
         else:
             model = AudioVAEGAN.load_from_checkpoint(args.checkpoint, strict=False)
+
         data_module = MusicDataModule(
             data_dir=args.data_path,
             target_sr=args.sample_rate,
@@ -36,6 +37,7 @@ if __name__ == '__main__':
             batch_size=args.batch_size,
             num_workers=os.cpu_count())
         data_module.setup()
+
     elif args.mode == 'LDM':
         raise NotImplementedError
 
@@ -43,5 +45,6 @@ if __name__ == '__main__':
         every_n_train_steps=100,
         save_top_k=1
     )
+
     trainer = L.Trainer(callbacks=[ckpt_callback], max_epochs=args.epochs)
     trainer.fit(model, datamodule=data_module)

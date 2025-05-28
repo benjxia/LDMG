@@ -1,3 +1,4 @@
+from typing import Union
 from lightning import LightningModule
 import torch
 from torch import nn
@@ -6,49 +7,9 @@ import numpy as np
 
 import math
 
-from ldm.modules import DEFAULT_1D_KERNEL_SIZE, DEFAULT_1D_PADDING, DEFAULT_AUDIO_DUR, DEFAULT_INPUT_SR, DEFAULT_LATENT_CHANNELS, DEFAULT_LATENT_SR, DEFAULT_MAX_CHANNELS
-from ldm.modules.loss import ELBO_Loss
-
-class SelfAttention(nn.Module):
-    def __init__(self, channels: int, n_heads: int, max_len: int = DEFAULT_AUDIO_DUR * DEFAULT_LATENT_SR):
-        """
-        Multiheaded self-attention (with residual connections)
-
-        Args:
-            channels (int): Channels for input sequence
-            n_heads (int): Number of attention heads
-        """
-        super().__init__()
-        self.dim = channels
-        self.attn = nn.MultiheadAttention(channels, n_heads, batch_first=True)
-
-        # Precompute positional encodings
-        position = torch.arange(0, max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, channels, 2) * -(math.log(10000.0) / channels))
-        pe = torch.zeros(max_len, channels)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe.unsqueeze(0), persistent=False)  # shape [1, max_len, channels]
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass for self-attention (with residual connections)
-
-        B = batch
-        C = channels
-        T = time
-        Args:
-            x (torch.Tensor): Sequence tensor of shape [B, C, T]
-
-        Returns:
-            torch.Tensor: Tensor of shape [B, C, T]
-        """
-        B, C, T = x.shape
-        x = x.permute(0, 2, 1)  # Reshape to [B, T, C] (expected shape for attention)
-        pos_emb = self.pe[:, :T, :] # self.register_buffer adds self.pe
-        attn_in = x + pos_emb
-        attn_out, _ = self.attn(attn_in, attn_in, attn_in, need_weights=False)
-        return (x + attn_out).permute(0, 2, 1)  # Residual connection, Back to [B, C, T]
+from . import DEFAULT_1D_KERNEL_SIZE, DEFAULT_1D_PADDING, DEFAULT_AUDIO_DUR, DEFAULT_INPUT_SR, DEFAULT_LATENT_CHANNELS, DEFAULT_LATENT_SR, DEFAULT_MAX_CHANNELS
+from .attention import SelfAttention
+from .loss import ELBO_Loss
 
 class UpsampleLayer(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
