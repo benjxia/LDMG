@@ -12,7 +12,6 @@ from lightning import LightningModule
 
 class AudioLDM(LightningModule):
     def __init__(self,
-                 latent_channels=DEFAULT_LATENT_CHANNELS,
                  n_dit_layers: int=4,
                  audiovae_ckpt_path: str = None,
                  lr: float = 1e-4

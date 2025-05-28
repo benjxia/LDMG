@@ -44,8 +44,10 @@ if __name__ == '__main__':
         if args.vae_checkpoint is None:
             raise ValueError
         if args.checkpoint is None:
-            model = AudioLDM(1,
-                             sample_rate=args.sample_rate, audiovae_ckpt_path=args.vae_checkpoint)
+            model = AudioLDM(
+                             sample_rate=args.sample_rate,
+                             audiovae_ckpt_path=args.vae_checkpoint
+                             )
         else:
             model = AudioLDM.load_from_checkpoint(args.checkpoint)
 
