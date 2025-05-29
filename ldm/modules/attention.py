@@ -63,5 +63,6 @@ class SelfAttention(nn.Module):
         attn_out, _ = self.attn(attn_in, attn_in, attn_in, need_weights=False)
         out = (x + attn_out)
         if self.permute:
-            x = x.permute(0, 2, 1)
+            out = out.permute(0, 2, 1)
         return out
+

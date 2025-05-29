@@ -12,7 +12,7 @@ from lightning import LightningModule
 
 class AudioLDM(LightningModule):
     def __init__(self,
-                 n_dit_layers: int=4,
+                 n_dit_layers: int=32,
                  audiovae_ckpt_path: str = None,
                  lr: float = 1e-4,
                  audio_dur:int = DEFAULT_AUDIO_DUR
@@ -30,7 +30,7 @@ class AudioLDM(LightningModule):
         assert audiovae_ckpt_path is not None
         self.vae = AudioVAEGAN.load_from_checkpoint(audiovae_ckpt_path, audio_dur=audio_dur)
 
-        self.dit = DiffusionTransformer(n_dit_layers, audio_dur=audio_dur)
+        self.dit = DiffusionTransformer(n_dit_layers, input_channels=32, hidden_channels=256, n_attn_heads=16, audio_dur=audio_dur)
         self.diffusion = GaussianDiffusion()
         self.vae.freeze()
         self.lr = lr
@@ -55,7 +55,10 @@ class AudioLDM(LightningModule):
             torch.Tensor: Waveform in latent space of shape [B, L, T']
         """
         encoder = self.vae.vae.encoder
-        return encoder(x)
+        mu, logvar = encoder(x)
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return eps.mul(std).add_(mu)
 
     def _decode(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -81,7 +84,7 @@ class AudioLDM(LightningModule):
         B = x_latent.shape[0]
         t = torch.randint(0, self.diffusion.timesteps, (B,), device=self.device)
         loss = self.diffusion.p_losses(self.dit, x_latent, t)
-        self.log("train_loss", loss)
+        self.log("train_loss", loss, prog_bar=True, on_epoch=True)
         return loss
 
     def configure_optimizers(self):

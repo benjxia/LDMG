@@ -85,7 +85,7 @@ class VAE_Encoder(nn.Module):
             layers.append(nn.Conv1d(in_ch, in_ch, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING))
             layers.append(nn.GELU())
 
-        layers.append(SelfAttention(in_ch, 4, audio_dur))
+        layers.append(SelfAttention(in_ch, 4, audio_dur * self.latent_sr))
 
         self.layers = nn.Sequential(*layers)
 
@@ -153,7 +153,7 @@ class VAE_Decoder(nn.Module):
             nn.GELU(),
         ]
 
-        layers.append(SelfAttention(channels, 4, audio_dur))
+        layers.append(SelfAttention(channels, 4, audio_dur * self.latent_sr))
 
         for i in range(self.n_upsamples):
             layers.append(UpsampleLayer(channels, channels))
@@ -239,3 +239,4 @@ class AudioVAE(LightningModule):
 
     def configure_optimizers(self):
         return optim.Adam(self.vae.parameters(), self.lr)
+

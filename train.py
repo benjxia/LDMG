@@ -14,7 +14,7 @@ if __name__ == '__main__':
                     prog='train.py',
                     description='Trains the latent diffusion model',
                     epilog='Good luck running my shit code - ben')
-    parser.add_argument('-m', '--mode', help='Whether to train VAE or LDM, takes values VAE or LDM', type=str, required=True) # Whether to train VAE-GAN or LDM <vae>
+    parser.add_argument('-m', '--mode', help='Whether to train VAE, LDM or CLDM, takes values VAE or LDM or CLDM', type=str, required=True) # Whether to train VAE-GAN or LDM <vae>
     parser.add_argument('-vg', '--vae_checkpoint', default=None, type=str)
     parser.add_argument('-c', '--checkpoint', default=None, type=str) # Path to checkpoint
     parser.add_argument('-d', '--data_path', default=None, type=str, required=True)
@@ -45,11 +45,11 @@ if __name__ == '__main__':
             raise ValueError
         if args.checkpoint is None:
             model = AudioLDM(
-                             sample_rate=args.sample_rate,
-                             audiovae_ckpt_path=args.vae_checkpoint
-                             )
+                n_dit_layers=16,
+                audiovae_ckpt_path=args.vae_checkpoint
+            )
         else:
-            model = AudioLDM.load_from_checkpoint(args.checkpoint)
+            model = AudioLDM.load_from_checkpoint(args.checkpoint, audiovae_ckpt_path=args.vae_checkpoint)
 
         # TODO: do something else for conditioned generation
         data_module = MusicDataModule(
@@ -59,11 +59,13 @@ if __name__ == '__main__':
             batch_size=args.batch_size,
             num_workers=os.cpu_count())
         data_module.setup()
+    elif args.mode == 'CLDM': # Conditioned LDM
+        raise NotImplementedError
 
     ckpt_callback = ModelCheckpoint(
         every_n_train_steps=100,
         save_top_k=1
     )
 
-    trainer = L.Trainer(callbacks=[ckpt_callback], max_epochs=args.epochs)
+    trainer = L.Trainer(callbacks=[ckpt_callback], max_epochs=args.epochs, log_every_n_steps=5)
     trainer.fit(model, datamodule=data_module)

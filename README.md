@@ -40,6 +40,10 @@ This will also create an additional directory `lightning_logs`
 python train.py --mode=VAE --checkpoint=<path_to_checkpoint> --data_path=<path_to_data>
 ```
 
+### Training an unconditioned Latent Diffusion Model
+```bash
+python train.py --mode=LDM --vae_checkpoint=<path_to_vae_checkpoint> --checkpoint=<path_to_checkpoint> --data_path=<path_to_data>
+```
 ### Open Tensorboard dashboard (Only run after the directory has been created)
 ```bash
 tensorboard --logdir lightning_logs/

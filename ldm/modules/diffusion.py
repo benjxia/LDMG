@@ -14,7 +14,7 @@ class DiffusionTransformerBlock(nn.Module):
     DiT block for audio waveforms
     Heavily inspired from https://arxiv.org/pdf/2212.09748
     """
-    def __init__(self, input_channels: int=DEFAULT_LATENT_CHANNELS, n_attn_heads=4):
+    def __init__(self, input_channels: int=DEFAULT_LATENT_CHANNELS, n_attn_heads=6):
         super(DiffusionTransformerBlock, self).__init__()
         self.ln1 = nn.LayerNorm(input_channels, elementwise_affine=False)
         self.attn = SelfAttention(input_channels, n_attn_heads, None, False)
@@ -120,21 +120,25 @@ class TimestepEmbedder(nn.Module):
 
 class DiffusionTransformer(nn.Module):
     def __init__(self,
-                 n_layers: int = 4,
-                 input_channels: int = DEFAULT_LATENT_CHANNELS, n_attn_heads: int=4,
+                 n_layers: int = 8,
+                 input_channels: int = DEFAULT_LATENT_CHANNELS,
+                 hidden_channels=512,
+                 n_attn_heads: int=8,
                  audio_dur: int = DEFAULT_AUDIO_DUR):
         super(DiffusionTransformer, self).__init__()
-        pe = sinu_posn_embedding(audio_dur * DEFAULT_LATENT_SR, input_channels)
+        pe = sinu_posn_embedding(audio_dur * DEFAULT_LATENT_SR, hidden_channels)
         self.register_buffer('pe', pe.unsqueeze(0), persistent=False)
 
-        self.timestep_embedding = TimestepEmbedder(input_channels)
+        self.timestep_embedding = TimestepEmbedder(hidden_channels)
+        self.up_project = nn.Conv1d(input_channels, hidden_channels, 1)
         layers = [
-            DiffusionTransformerBlock(input_channels, n_attn_heads) for _ in range(n_layers)
+            DiffusionTransformerBlock(hidden_channels, n_attn_heads) for _ in range(n_layers)
         ]
         layers.append(
-            DiffusionTransformerFinalLayer(input_channels)
+            DiffusionTransformerFinalLayer(hidden_channels)
         )
         self.layers = nn.ModuleList(layers)
+        self.down_project = nn.Conv1d(hidden_channels, input_channels, 1)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """
@@ -146,6 +150,7 @@ class DiffusionTransformer(nn.Module):
             torch.Tensor: Predicted noise for timestep t - 1
         """
         B, C, T = x.shape
+        x = self.up_project(x)
         x = x.permute(0, 2, 1)
         x = x + self.pe[:, :T, :]
         c = self.timestep_embedding(t)
@@ -153,6 +158,7 @@ class DiffusionTransformer(nn.Module):
             x = layer(x, c)
 
         x = x.permute(0, 2, 1)
+        x = self.down_project(x)
         return x
 
 # TODO: add a conditioned DiT, im lazy tho
