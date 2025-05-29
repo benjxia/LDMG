@@ -13,6 +13,7 @@ from lightning import LightningModule
 class AudioLDM(LightningModule):
     def __init__(self,
                  n_dit_layers: int=32,
+                 n_attn_heads: int = 8,
                  audiovae_ckpt_path: str = None,
                  lr: float = 1e-4,
                  audio_dur:int = DEFAULT_AUDIO_DUR
@@ -30,7 +31,7 @@ class AudioLDM(LightningModule):
         assert audiovae_ckpt_path is not None
         self.vae = AudioVAEGAN.load_from_checkpoint(audiovae_ckpt_path, audio_dur=audio_dur)
 
-        self.dit = DiffusionTransformer(n_dit_layers, input_channels=32, hidden_channels=256, n_attn_heads=16, audio_dur=audio_dur)
+        self.dit = DiffusionTransformer(n_dit_layers, input_channels=32, hidden_channels=256, n_attn_heads=n_attn_heads, audio_dur=audio_dur)
         self.diffusion = GaussianDiffusion()
         self.vae.freeze()
         self.lr = lr
