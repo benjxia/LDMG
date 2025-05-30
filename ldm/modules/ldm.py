@@ -90,6 +90,7 @@ class AudioLDM(LightningModule):
 
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.dit.parameters(), lr=self.lr)
-        return opt
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=1000)
+        return [opt], [sched]
 
 # TODO: add a conditioned version of AudioLDM
