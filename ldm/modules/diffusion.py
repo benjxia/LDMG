@@ -3,6 +3,7 @@ from typing import Union
 import torch
 from torch import nn
 import lightning as L
+import numpy as np
 
 from . import DEFAULT_1D_KERNEL_SIZE, DEFAULT_1D_PADDING, DEFAULT_AUDIO_DUR, DEFAULT_LATENT_CHANNELS, DEFAULT_LATENT_SR
 from .attention import CrossAttention, sinu_posn_embedding, SelfAttention
@@ -147,7 +148,7 @@ class DiffusionTransformer(nn.Module):
     def __init__(self,
                  n_layers: int = 8,
                  input_channels: int = DEFAULT_LATENT_CHANNELS,
-                 hidden_channels=512,
+                 hidden_channels=256,
                  n_attn_heads: int=8,
                  audio_dur: int = DEFAULT_AUDIO_DUR,
                  cross_attn_enabled=False):
@@ -157,7 +158,19 @@ class DiffusionTransformer(nn.Module):
         self.register_buffer('pe', pe.unsqueeze(0).permute(0, 2, 1), persistent=False)
 
         self.timestep_embedding = TimestepEmbedder(hidden_channels)
-        self.up_project = nn.Conv1d(input_channels, hidden_channels, DEFAULT_1D_KERNEL_SIZE, padding=DEFAULT_1D_PADDING)
+        n_upsamples = np.ceil(np.log2(hidden_channels / input_channels)).astype(np.int32)
+        assert (2 ** n_upsamples) * input_channels == hidden_channels
+
+        up_layers = []
+        in_ch = input_channels
+        for i in range(n_upsamples):
+            out_ch = min(in_ch * 2, hidden_channels)
+            up_layers.append(nn.Conv1d(in_ch, out_ch, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING))
+            in_ch = out_ch
+            up_layers.append(nn.GELU())
+
+        self.upsample = nn.Sequential(*up_layers)
+
         layers = [
             DiffusionTransformerBlock(hidden_channels, n_attn_heads, cross_attn_enabled and i % 4 == 0) for i in range(n_layers)
         ]
@@ -165,7 +178,15 @@ class DiffusionTransformer(nn.Module):
             DiffusionTransformerFinalLayer(hidden_channels)
         )
         self.layers = nn.ModuleList(layers)
-        self.down_project = nn.Conv1d(hidden_channels, input_channels, DEFAULT_1D_KERNEL_SIZE, padding=DEFAULT_1D_PADDING)
+
+        down_layers = []
+        in_ch = hidden_channels
+        for i in range(n_upsamples):
+            out_ch = min(in_ch // 2, hidden_channels)
+            down_layers.append(nn.Conv1d(in_ch, out_ch, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING))
+            in_ch = out_ch
+            down_layers.append(nn.GELU())
+        self.downsample = nn.Sequential(*down_layers)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, tc: Union[None, torch.Tensor]=None) -> torch.Tensor:
         """
@@ -177,13 +198,13 @@ class DiffusionTransformer(nn.Module):
             torch.Tensor: Predicted noise for timestep t - 1
         """
         B, C, T = x.shape
-        x = self.up_project(x)
+        x = self.upsample(x)
         x = x + self.pe[:, :T, :]
         c = self.timestep_embedding(t)
         for layer in self.layers:
             x = layer(x, c, tc)
 
-        x = self.down_project(x)
+        x = self.downsample(x)
         return x
 
 # TODO: add a conditioned DiT, im lazy tho
