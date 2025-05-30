@@ -148,7 +148,7 @@ class DiffusionTransformer(nn.Module):
     def __init__(self,
                  n_layers: int = 8,
                  input_channels: int = DEFAULT_LATENT_CHANNELS,
-                 hidden_channels=256,
+                 hidden_channels=128,
                  n_attn_heads: int=8,
                  audio_dur: int = DEFAULT_AUDIO_DUR,
                  cross_attn_enabled=False):
