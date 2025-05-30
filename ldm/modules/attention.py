@@ -50,7 +50,7 @@ class SelfAttention(nn.Module):
             Could be shape [B, T, C] if permute = False
 
         Returns:
-            torch.Tensor: Tensor of shape [B, C, T]
+            torch.Tensor: Tensor of shape [B, C, T] if permute = True else [B, T, C]
         """
         B, C, T = x.shape
         if self.permute:
@@ -59,9 +59,66 @@ class SelfAttention(nn.Module):
             pos_emb = self.pe[:, :T, :] # self.register_buffer adds self.pe
             attn_in = x + pos_emb
         else:
+            # Don't pass x directly into self.attention because we want a residual connection if there's positional embeddings
             attn_in = x
         attn_out, _ = self.attn(attn_in, attn_in, attn_in, need_weights=False)
         out = (x + attn_out)
+        if self.permute:
+            out = out.permute(0, 2, 1)
+        return out
+
+class CrossAttention(nn.Module):
+    """
+    Cross attention with positional embedding
+    """
+    def __init__(self, channels: int, n_heads: int, max_len: Union[None, int] = DEFAULT_AUDIO_DUR * DEFAULT_LATENT_SR, permute=True):
+        """
+        Multiheaded self-attention (with residual connections)
+
+        Args:
+            channels (int): Channels for input sequence
+            n_heads (int): Number of attention heads
+            max_len: Max sequence length, if none, this module will not include positional embeddings
+        """
+        super().__init__()
+        self.dim = channels
+        self.attn = nn.MultiheadAttention(channels, n_heads, batch_first=True)
+        self.permute = permute
+
+        # Precompute positional encodings
+        self.max_len = max_len
+        if max_len is not None:
+            pe = sinu_posn_embedding(max_len, channels)
+            self.register_buffer('pe', pe.unsqueeze(0), persistent=False) # shape [1, max_len, channels]
+
+    def forward(self, q: torch.Tensor, kv: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for self-attention (with residual connections)
+
+        B = batch
+        C = channels
+        T = time
+        Args:
+            x (torch.Tensor): Sequence tensor of shape [B, C, T]
+            Could be shape [B, T, C] if permute = False
+
+            kv (torch.Tensor): Sequence tensor of shape [B, T, C] DIFFERENT SHAPES! This is because this is intended for cross-attention for text-conditioned diffusion
+        Returns:
+            torch.Tensor: Tensor of shape [B, C, T] if permute = True else [B, T, C]
+        """
+        B, C, T = x.shape
+        if self.permute:
+            x = x.permute(0, 2, 1)  # Reshape to [B, T, C] (expected shape for attention)
+        if self.max_len is not None:
+            pos_emb = self.pe[:, :T, :] # self.register_buffer adds self.pe
+            attn_in = x + pos_emb
+        else:
+            # Don't pass x directly into self.attention because we want a residual connection if there's positional embeddings
+            attn_in = x
+
+        attn_out, _ = self.attn(attn_in, kv, kv, need_weights=False)
+        out = (x + attn_out)
+
         if self.permute:
             out = out.permute(0, 2, 1)
         return out

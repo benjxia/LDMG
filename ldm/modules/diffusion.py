@@ -1,10 +1,11 @@
 import math
+from typing import Union
 import torch
 from torch import nn
 import lightning as L
 
-from . import DEFAULT_AUDIO_DUR, DEFAULT_LATENT_CHANNELS, DEFAULT_LATENT_SR
-from .attention import sinu_posn_embedding, SelfAttention
+from . import DEFAULT_1D_KERNEL_SIZE, DEFAULT_1D_PADDING, DEFAULT_AUDIO_DUR, DEFAULT_LATENT_CHANNELS, DEFAULT_LATENT_SR
+from .attention import CrossAttention, sinu_posn_embedding, SelfAttention
 
 def modulate(x, scale, shift):
     return x * (1 + scale) + shift
@@ -14,35 +15,57 @@ class DiffusionTransformerBlock(nn.Module):
     DiT block for audio waveforms
     Heavily inspired from https://arxiv.org/pdf/2212.09748
     """
-    def __init__(self, input_channels: int=DEFAULT_LATENT_CHANNELS, n_attn_heads=6):
+    def __init__(self, input_channels: int = DEFAULT_LATENT_CHANNELS, n_attn_heads=6, cross_attn_enabled=False):
         super(DiffusionTransformerBlock, self).__init__()
+        self.cross_attn_enabled = cross_attn_enabled
+
         self.ln1 = nn.LayerNorm(input_channels, elementwise_affine=False)
-        self.attn = SelfAttention(input_channels, n_attn_heads, None, False)
+        self.attn = SelfAttention(input_channels, n_attn_heads, None)
+
+        self.ln_ca = nn.LayerNorm(input_channels, elementwise_affine=False) if cross_attn_enabled else nn.Identity()
+        self.cross_attn = CrossAttention(input_channels, n_attn_heads, None) if cross_attn_enabled else nn.Identity()
+
         self.ln2 = nn.LayerNorm(input_channels, elementwise_affine=False)
         self.ff = nn.Sequential(
-            nn.Linear(input_channels, 4 * input_channels),
+            nn.Conv1d(input_channels, 4 * input_channels, DEFAULT_1D_KERNEL_SIZE, padding=DEFAULT_1D_PADDING),
             nn.GELU(),
-            nn.Linear(4 * input_channels, input_channels),
+            nn.Conv1d(4 * input_channels, input_channels, DEFAULT_1D_KERNEL_SIZE, padding=DEFAULT_1D_PADDING),
         )
+
+        # adaptive layer norm
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(input_channels, 6 * input_channels, bias=True)
+            nn.Linear(input_channels, 9 * input_channels, bias=True)
         )
 
-    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, c: torch.Tensor, kv: Union[None, torch.Tensor] = None) -> torch.Tensor:
         """
-        L = input channels
         Args:
-            x (torch.Tensor): Input latent stuff of shape [B, T', L] - Note: we this is not the standard [B, L, T'] shape!
-            c (torch.Tensor): (Time) Conditioning of shape [B, L]
+            x (torch.Tensor): [B, L, T'] latent input
+            c (torch.Tensor): [B, L] conditioning (e.g., timestep embedding)
+            kv (torch.Tensor | None): [B, num_tokens, L] for cross-attn (e.g., text embeddings)
 
         Returns:
-            torch.Tensor: Output tensor of shape [B, L, T']
+            torch.Tensor: [B, L, T']
         """
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c.unsqueeze(1)).chunk(6, dim=-1) # Each now of shape [B, 1, L]
+        # AdaLN modulation, all shape [B, L, 1]
+        shift_msa, scale_msa, gate_msa, \
+        shift_mlp, scale_mlp, gate_mlp, \
+        shift_ca, scale_ca, gate_ca = self.adaLN_modulation(c).unsqueeze(-1).chunk(9, dim=-2)
 
-        x = x + gate_msa * self.attn(modulate(self.ln1(x), scale_msa, shift_msa))
-        x = x + gate_mlp * self.ff(modulate(self.ln2(x), scale_mlp, shift_mlp))
+        # Self-attention with modulation and residual
+        x_ln1 = self.ln1(x.transpose(1, 2)).transpose(1, 2)
+        x = x + gate_msa * self.attn(modulate(x_ln1, scale_msa, shift_msa))
+
+        # Cross-attention if enabled
+        if self.cross_attn_enabled:
+            x_ln_ca = self.ln_ca(x.transpose(1, 2)).transpose(1, 2)
+            # hope we didnt set kv to None, otherwise everything implodes
+            x = x + gate_ca * self.cross_attn(modulate(x_ln_ca, scale_ca, shift_ca), kv)
+
+        # Feedforward with modulation and residual
+        x_ln2 = self.ln2(x.transpose(1, 2)).transpose(1, 2)
+        x = x + gate_mlp * self.ff(modulate(x_ln2, scale_mlp, shift_mlp))
 
         return x
 
@@ -51,21 +74,23 @@ class DiffusionTransformerFinalLayer(nn.Module):
         super(DiffusionTransformerFinalLayer, self).__init__()
         self.ln1 = nn.LayerNorm(input_channels, elementwise_affine=False)
         self.mlp = nn.Sequential(
-            nn.Linear(input_channels, 4 * input_channels),
+            nn.Conv1d(input_channels, 4 * input_channels, DEFAULT_1D_KERNEL_SIZE, padding=DEFAULT_1D_PADDING),
             nn.GELU(),
-            nn.Linear(input_channels * 4, input_channels)
+            nn.Conv1d(input_channels * 4, input_channels, DEFAULT_1D_KERNEL_SIZE, padding=DEFAULT_1D_PADDING)
         )
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(input_channels, 2 * input_channels, bias=True)
         )
 
-    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, c: torch.Tensor, _) -> torch.Tensor:
         """
         Same input shape as DiffusionTransformerBlock
+        _ is a dummy parameter that does nothing, cus i want to loop over layers in DiffusionTransformer with possible text conditioning
         """
-        scale, shift = self.adaLN_modulation(c.unsqueeze(1)).chunk(2, dim=-1) # Each now of shape [B, 1, L]
-        x = self.mlp(modulate(self.ln1(x), scale, shift))
+        scale, shift = self.adaLN_modulation(c).unsqueeze(-1).chunk(2, dim=-2) # Each now of shape [B, L, 1]
+        x_ln1 = self.ln1(x.transpose(1, 2)).transpose(1, 2)
+        x = self.mlp(modulate(x_ln1, scale, shift))
         return x
 
 class TimestepEmbedder(nn.Module):
@@ -124,40 +149,40 @@ class DiffusionTransformer(nn.Module):
                  input_channels: int = DEFAULT_LATENT_CHANNELS,
                  hidden_channels=512,
                  n_attn_heads: int=8,
-                 audio_dur: int = DEFAULT_AUDIO_DUR):
+                 audio_dur: int = DEFAULT_AUDIO_DUR,
+                 cross_attn_enabled=False):
         super(DiffusionTransformer, self).__init__()
         pe = sinu_posn_embedding(audio_dur * DEFAULT_LATENT_SR, hidden_channels)
-        self.register_buffer('pe', pe.unsqueeze(0), persistent=False)
+        # pe is normally shape [len, D], make it [1, D, len] to make it compatible with waveform shape
+        self.register_buffer('pe', pe.unsqueeze(0).permute(0, 2, 1), persistent=False)
 
         self.timestep_embedding = TimestepEmbedder(hidden_channels)
-        self.up_project = nn.Conv1d(input_channels, hidden_channels, 1)
+        self.up_project = nn.Conv1d(input_channels, hidden_channels, DEFAULT_1D_KERNEL_SIZE, padding=DEFAULT_1D_PADDING)
         layers = [
-            DiffusionTransformerBlock(hidden_channels, n_attn_heads) for _ in range(n_layers)
+            DiffusionTransformerBlock(hidden_channels, n_attn_heads, cross_attn_enabled and i % 4 == 0) for i in range(n_layers)
         ]
         layers.append(
             DiffusionTransformerFinalLayer(hidden_channels)
         )
         self.layers = nn.ModuleList(layers)
-        self.down_project = nn.Conv1d(hidden_channels, input_channels, 1)
+        self.down_project = nn.Conv1d(hidden_channels, input_channels, DEFAULT_1D_KERNEL_SIZE, padding=DEFAULT_1D_PADDING)
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, t: torch.Tensor, tc: Union[None, torch.Tensor]=None) -> torch.Tensor:
         """
         Args:
             x (torch.Tensor): Tensor of latent audio of shape [B, L, T]
             t (torch.Tensor): Tensor of timesteps of shape [B]
-
+            tc (torch.Tensor): Optional text conditioning of shape [B, text_len, L]
         Returns:
             torch.Tensor: Predicted noise for timestep t - 1
         """
         B, C, T = x.shape
         x = self.up_project(x)
-        x = x.permute(0, 2, 1)
         x = x + self.pe[:, :T, :]
         c = self.timestep_embedding(t)
         for layer in self.layers:
-            x = layer(x, c)
+            x = layer(x, c, tc)
 
-        x = x.permute(0, 2, 1)
         x = self.down_project(x)
         return x
 

@@ -28,9 +28,9 @@ if __name__ == '__main__':
 
     if args.mode == 'VAE':
         if args.checkpoint is None:
-            model = AudioVAEGAN(1, sample_rate=args.sample_rate, discriminator_pause=args.discriminator_pause)
+            model = AudioVAEGAN(1, kl_weight=1e-2, sample_rate=args.sample_rate, discriminator_pause=args.discriminator_pause)
         else:
-            model = AudioVAEGAN.load_from_checkpoint(args.checkpoint, strict=False)
+            model = AudioVAEGAN.load_from_checkpoint(args.checkpoint, strict=False, kl_weight=1e-2)
 
         data_module = MusicDataModule(
             data_dir=args.data_path,
@@ -49,7 +49,7 @@ if __name__ == '__main__':
                 audiovae_ckpt_path=args.vae_checkpoint
             )
         else:
-            model = AudioLDM.load_from_checkpoint(args.checkpoint, audiovae_ckpt_path=args.vae_checkpoint)
+            model = AudioLDM.load_from_checkpoint(args.checkpoint, audiovae_ckpt_path=args.vae_checkpoint, n_dit_layers=8)
 
         # TODO: do something else for conditioned generation
         data_module = MusicDataModule(
