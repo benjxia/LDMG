@@ -158,18 +158,20 @@ class DiffusionTransformer(nn.Module):
         self.register_buffer('pe', pe.unsqueeze(0).permute(0, 2, 1), persistent=False)
 
         self.timestep_embedding = TimestepEmbedder(hidden_channels)
-        n_upsamples = np.ceil(np.log2(hidden_channels / input_channels)).astype(np.int32)
-        assert (2 ** n_upsamples) * input_channels == hidden_channels
+        # n_upsamples = np.ceil(np.log2(hidden_channels / input_channels)).astype(np.int32)
+        # assert (2 ** n_upsamples) * input_channels == hidden_channels
 
-        up_layers = []
-        in_ch = input_channels
-        for i in range(n_upsamples):
-            out_ch = min(in_ch * 2, hidden_channels)
-            up_layers.append(nn.Conv1d(in_ch, out_ch, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING))
-            in_ch = out_ch
-            up_layers.append(nn.GELU())
+        # up_layers = []
+        # in_ch = input_channels
+        # for i in range(n_upsamples):
+        #     out_ch = min(in_ch * 2, hidden_channels)
+        #     up_layers.append(nn.Conv1d(in_ch, out_ch, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING))
+        #     in_ch = out_ch
+        #     up_layers.append(nn.GELU())
 
-        self.upsample = nn.Sequential(*up_layers)
+        # self.upsample = nn.Sequential(*up_layers)
+        self.upsample = nn.Conv1d(input_channels, hidden_channels, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING)
+
 
         layers = [
             DiffusionTransformerBlock(hidden_channels, n_attn_heads, cross_attn_enabled and i % 4 == 0) for i in range(n_layers)
@@ -179,14 +181,15 @@ class DiffusionTransformer(nn.Module):
         )
         self.layers = nn.ModuleList(layers)
 
-        down_layers = []
-        in_ch = hidden_channels
-        for i in range(n_upsamples):
-            out_ch = min(in_ch // 2, hidden_channels)
-            down_layers.append(nn.Conv1d(in_ch, out_ch, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING))
-            in_ch = out_ch
-            down_layers.append(nn.GELU())
-        self.downsample = nn.Sequential(*down_layers)
+        # down_layers = []
+        # in_ch = hidden_channels
+        # for i in range(n_upsamples):
+        #     out_ch = min(in_ch // 2, hidden_channels)
+        #     down_layers.append(nn.Conv1d(in_ch, out_ch, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING))
+        #     in_ch = out_ch
+        #     down_layers.append(nn.GELU())
+        # self.downsample = nn.Sequential(*down_layers)
+        self.downsample = nn.Conv1d(hidden_channels, input_channels, DEFAULT_1D_KERNEL_SIZE, stride=1, padding=DEFAULT_1D_PADDING)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, tc: Union[None, torch.Tensor]=None) -> torch.Tensor:
         """
