@@ -45,7 +45,7 @@ if __name__ == '__main__':
             raise ValueError
         if args.checkpoint is None:
             model = AudioLDM(
-                n_dit_layers=16,
+                n_dit_layers=8,
                 audiovae_ckpt_path=args.vae_checkpoint
             )
         else:
