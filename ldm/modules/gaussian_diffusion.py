@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 class GaussianDiffusion:
-    def __init__(self, timesteps=1000, beta_start=1e-4, beta_end=0.02):
+    def __init__(self, timesteps=500, beta_start=1e-4, beta_end=0.02):
         self.timesteps = timesteps
         self.betas = torch.linspace(beta_start, beta_end, timesteps)
         self.alphas = 1.0 - self.betas
