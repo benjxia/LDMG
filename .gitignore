@@ -6,5 +6,6 @@
 **/lightning_logs
 **/Data/
 fma_medium
+fma_large
 fma_metadata
 *.zip
