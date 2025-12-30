@@ -2,6 +2,7 @@
 import argparse
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
+import torch
 
 import os
 
@@ -28,9 +29,9 @@ if __name__ == '__main__':
 
     if args.mode == 'VAE':
         if args.checkpoint is None:
-            model = AudioVAEGAN(1, kl_weight=1e-2, sample_rate=args.sample_rate, discriminator_pause=args.discriminator_pause)
+            model = AudioVAEGAN(1, kl_weight=1e-4, sample_rate=args.sample_rate, discriminator_pause=args.discriminator_pause, audio_dur=args.audio_dur)
         else:
-            model = AudioVAEGAN.load_from_checkpoint(args.checkpoint, strict=False, kl_weight=1e-2)
+            model = AudioVAEGAN.load_from_checkpoint(args.checkpoint, strict=False, kl_weight=1e-4, audio_dur=args.audio_dir)
 
         data_module = MusicDataModule(
             data_dir=args.data_path,
@@ -46,7 +47,8 @@ if __name__ == '__main__':
         if args.checkpoint is None:
             model = AudioLDM(
                 n_dit_layers=8,
-                audiovae_ckpt_path=args.vae_checkpoint
+                audiovae_ckpt_path=args.vae_checkpoint,
+                audio_dur=args.audio_dur
             )
         else:
             model = AudioLDM.load_from_checkpoint(args.checkpoint, audiovae_ckpt_path=args.vae_checkpoint, n_dit_layers=8)
@@ -62,10 +64,22 @@ if __name__ == '__main__':
     elif args.mode == 'CLDM': # Conditioned LDM
         raise NotImplementedError
 
+    model = torch.compile(model, mode='reduce-overhead')
+
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision('high')
+
     ckpt_callback = ModelCheckpoint(
-        every_n_train_steps=100,
+        every_n_train_steps=1000,
         save_top_k=1
     )
 
-    trainer = L.Trainer(callbacks=[ckpt_callback], max_epochs=args.epochs, log_every_n_steps=5)
+    trainer = L.Trainer(
+        precision='bf16-mixed',
+        callbacks=[ckpt_callback],
+        max_epochs=args.epochs,
+        log_every_n_steps=5
+    )
     trainer.fit(model, datamodule=data_module)

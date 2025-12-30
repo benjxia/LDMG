@@ -12,6 +12,8 @@ import os
 
 from ldm.modules import DEFAULT_INPUT_SR, DEFAULT_AUDIO_DUR
 
+NATIVE_SR = 44100
+
 class FmaMediumDataset(Dataset):
     def __init__(self, root_dir, sample_rate=DEFAULT_INPUT_SR, duration=DEFAULT_AUDIO_DUR):
         """
@@ -32,6 +34,8 @@ class FmaMediumDataset(Dataset):
 
         self.target_frames = sample_rate * duration
         self.crop = ta.RandomResizedCrop(self.target_frames)
+        self.resamplers = {}
+        self.frames = NATIVE_SR * duration
 
     def __len__(self):
         return len(self.audio_paths)
@@ -39,7 +43,7 @@ class FmaMediumDataset(Dataset):
     def __getitem__(self, idx):
         path = self.audio_paths[idx]
         try:
-            waveform, sr = torchaudio.load(path)
+            waveform, sr = torchaudio.load(path, num_frames=self.frames)
         except RuntimeError:
             # Cus theres a few malformed waveforms in fma medium, pray the collate function can handle this case
             return None
@@ -49,7 +53,9 @@ class FmaMediumDataset(Dataset):
 
         # Resample to target sample rate
         if sr != self.sample_rate:
-            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)
+            if sr not in self.resamplers:
+                self.resamplers[sr] = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)
+            resampler = self.resamplers[sr]
             waveform = resampler(waveform)
 
         # Pad or crop to fixed number of samples
@@ -94,5 +100,10 @@ class MusicDataModule(L.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(
-            self.train_dataset, pin_memory=True, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, collate_fn=self._collate_fn
+            self.train_dataset,
+            pin_memory=True,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            collate_fn=self._collate_fn
         )

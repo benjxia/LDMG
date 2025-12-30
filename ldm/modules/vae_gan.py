@@ -47,7 +47,7 @@ class AudioVAEGAN(LightningModule):
         self.lr = lr
         self.automatic_optimization = False # We define the optimization routine in training_step() instead of using lightning's automatic one
 
-        self.vae = VAE(channels, audio_dur=audio_dur)
+        self.vae = VAE(channels, sample_rate=sample_rate, audio_dur=audio_dur)
         self.discriminator = PatchDiscriminator(channels)
 
         self.recon_loss = ELBO_Loss(kl_weight, sample_rate)
@@ -63,12 +63,13 @@ class AudioVAEGAN(LightningModule):
     #     return F.binary_cross_entropy_with_logits(pred, target)
 
     # Hinge adversarial loss
-    def adversarial_loss(self, pred, target_is_real=True):
-        if target_is_real:
-            return torch.mean(F.relu(1.0 - pred))
-        else:
-            return torch.mean(F.relu(1.0 + pred))
+    def adversarial_loss_real(self, pred):
+        return torch.mean(F.relu(1.0 - pred))
 
+    def adverserial_loss_fake(self, pred):
+        return torch.mean(F.relu(1.0 + pred))
+
+    @torch.compile(mode='reduce-overhead')
     def training_step(self, batch, batch_idx):
         real = batch
         opt_vae, opt_disc = self.optimizers()
@@ -79,18 +80,18 @@ class AudioVAEGAN(LightningModule):
 
         elbo = self.recon_loss(recon, real, mu, logvar)
 
-        d_fake, fake_feats = self.discriminator(recon, return_features=True)
-        _, real_feats = self.discriminator(real, return_features=True)
+        d_fake = self.discriminator(recon, return_features=False)
+        # _, real_feats = self.discriminator(real, return_features=False)
 
-        adv_loss = self.adversarial_loss(d_fake, True)
-        fm_loss = feature_matching_loss(real_feats, fake_feats)
+        adv_loss = self.adversarial_loss_real(d_fake)
+        # fm_loss = feature_matching_loss(real_feats, fake_feats)
 
-        total_gen_loss = elbo + self.adv_weight * adv_loss + fm_loss
+        total_gen_loss = elbo + self.adv_weight * adv_loss
 
+        opt_vae.zero_grad()
         self.manual_backward(total_gen_loss)
         torch.nn.utils.clip_grad_norm_(self.vae.parameters(), max_norm=1.0)
         opt_vae.step()
-        opt_vae.zero_grad()
         self.untoggle_optimizer(opt_vae)
 
         # === Train Discriminator ===
@@ -100,34 +101,34 @@ class AudioVAEGAN(LightningModule):
         d_real = self.discriminator(real)
         d_fake = self.discriminator(recon_detached)
 
-        real_loss = self.adversarial_loss(d_real, True)
-        fake_loss = self.adversarial_loss(d_fake, False)
+        real_loss = self.adversarial_loss_real(d_real)
+        fake_loss = self.adversarial_loss_fake(d_fake)
         d_loss = 0.5 * (real_loss + fake_loss)
 
         # Discriminator's prety strong, let the generator have some fun
-        if self.discriminator_pause != 0 and batch_idx % self.discriminator_pause == 0:
-            opt_disc.zero_grad()
-            self.log_dict({
-                "gen/elbo": elbo,
-                "gen/adv": adv_loss,
-                "gen/fm": fm_loss,
-                "gen/total": total_gen_loss,
-                "disc/loss": d_loss,
-            }, prog_bar=True, on_step=True, on_epoch=True)
-            self.untoggle_optimizer(opt_disc)
-            return
+        # if self.discriminator_pause != 0 and batch_idx % self.discriminator_pause == 0:
+        #     opt_disc.zero_grad()
+        #     self.log_dict({
+        #         "gen/elbo": elbo,
+        #         "gen/adv": adv_loss,
+        #         # "gen/fm": fm_loss,
+        #         "gen/total": total_gen_loss,
+        #         "disc/loss": d_loss,
+        #     }, prog_bar=True, on_step=True, on_epoch=True)
+        #     self.untoggle_optimizer(opt_disc)
+        #     return
 
+        opt_disc.zero_grad()
         self.manual_backward(d_loss)
         torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
         opt_disc.step()
-        opt_disc.zero_grad()
         self.untoggle_optimizer(opt_disc)
 
         # === Logging ===
         self.log_dict({
             "gen/elbo": elbo,
             "gen/adv": adv_loss,
-            "gen/fm": fm_loss,
+            # "gen/fm": fm_loss,
             "gen/total": total_gen_loss,
             "disc/loss": d_loss,
         }, prog_bar=True, on_step=True, on_epoch=True)
