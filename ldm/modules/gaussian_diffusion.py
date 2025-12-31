@@ -22,7 +22,6 @@ class GaussianDiffusion:
             if isinstance(attr, torch.Tensor):
                 setattr(self, name, attr.to(device))
 
-    @torch.compile
     def q_sample(self, x_start, t, noise=None):
         self.to(x_start.device)
         if noise is None:
@@ -33,7 +32,6 @@ class GaussianDiffusion:
 
         return sqrt_alpha_cumprod_t * x_start + sqrt_one_minus_alpha_cumprod_t * noise
 
-    @torch.compile
     def p_losses(self, model, x_start, t):
         self.to(x_start.device)
         noise = torch.randn_like(x_start)
@@ -42,7 +40,6 @@ class GaussianDiffusion:
         return F.mse_loss(predicted_noise, noise)
 
     @torch.no_grad()
-    @torch.compile
     def sample(self, model, shape, device):
         self.to(device)
         x = torch.randn(shape, device=device)

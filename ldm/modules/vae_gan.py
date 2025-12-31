@@ -47,7 +47,7 @@ class AudioVAEGAN(LightningModule):
         self.lr = lr
         self.automatic_optimization = False # We define the optimization routine in training_step() instead of using lightning's automatic one
 
-        self.vae = VAE(channels, sample_rate=sample_rate, audio_dur=audio_dur)
+        self.vae = VAE(channels, input_sr=sample_rate, audio_dur=audio_dur)
         self.discriminator = PatchDiscriminator(channels)
 
         self.recon_loss = ELBO_Loss(kl_weight, sample_rate)
@@ -66,10 +66,9 @@ class AudioVAEGAN(LightningModule):
     def adversarial_loss_real(self, pred):
         return torch.mean(F.relu(1.0 - pred))
 
-    def adverserial_loss_fake(self, pred):
+    def adversarial_loss_fake(self, pred):
         return torch.mean(F.relu(1.0 + pred))
 
-    @torch.compile(mode='reduce-overhead')
     def training_step(self, batch, batch_idx):
         real = batch
         opt_vae, opt_disc = self.optimizers()
@@ -142,5 +141,5 @@ class AudioVAEGAN(LightningModule):
 
     def configure_optimizers(self):
         opt_g = torch.optim.Adam(self.vae.parameters(), lr=self.lr)
-        opt_d = torch.optim.Adam(self.discriminator.parameters(), lr=self.lr * 2)
+        opt_d = torch.optim.Adam(self.discriminator.parameters(), lr=self.lr * 1e-1)
         return [opt_g, opt_d]

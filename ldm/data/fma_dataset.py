@@ -44,7 +44,7 @@ class FmaMediumDataset(Dataset):
         path = self.audio_paths[idx]
         try:
             waveform, sr = torchaudio.load(path, num_frames=self.frames)
-        except RuntimeError:
+        except (RuntimeError, MemoryError):
             # Cus theres a few malformed waveforms in fma medium, pray the collate function can handle this case
             return None
         # Convert to mono
