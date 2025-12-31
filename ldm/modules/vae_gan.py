@@ -79,13 +79,13 @@ class AudioVAEGAN(LightningModule):
 
         elbo = self.recon_loss(recon, real, mu, logvar)
 
-        d_fake = self.discriminator(recon, return_features=False)
-        # _, real_feats = self.discriminator(real, return_features=False)
+        d_fake, fake_feats = self.discriminator(recon, return_features=True)
+        _, real_feats = self.discriminator(real, return_features=True)
 
         adv_loss = self.adversarial_loss_real(d_fake)
-        # fm_loss = feature_matching_loss(real_feats, fake_feats)
+        fm_loss = feature_matching_loss(real_feats, fake_feats)
 
-        total_gen_loss = elbo + self.adv_weight * adv_loss
+        total_gen_loss = elbo + self.adv_weight * adv_loss + fm_loss
 
         opt_vae.zero_grad()
         self.manual_backward(total_gen_loss)
@@ -127,7 +127,7 @@ class AudioVAEGAN(LightningModule):
         self.log_dict({
             "gen/elbo": elbo,
             "gen/adv": adv_loss,
-            # "gen/fm": fm_loss,
+            "gen/fm": fm_loss,
             "gen/total": total_gen_loss,
             "disc/loss": d_loss,
         }, prog_bar=True, on_step=True, on_epoch=True)
@@ -141,5 +141,5 @@ class AudioVAEGAN(LightningModule):
 
     def configure_optimizers(self):
         opt_g = torch.optim.Adam(self.vae.parameters(), lr=self.lr)
-        opt_d = torch.optim.Adam(self.discriminator.parameters(), lr=self.lr * 1e-1)
+        opt_d = torch.optim.Adam(self.discriminator.parameters(), lr=self.lr * 2)
         return [opt_g, opt_d]
